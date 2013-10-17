@@ -199,7 +199,7 @@ class RESTClient:
             exc_type, exc_value, exc_tb = sys.exc_info()
             LOG.error(_("Error while connecting to %s :  %s") % (self.uri, exc_type))
             raise q_exc.ServiceUnavailable()
-
+        except CannotSendRequest as e:
 
     
     

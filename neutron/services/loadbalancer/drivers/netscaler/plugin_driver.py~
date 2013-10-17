@@ -1,6 +1,7 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 #
 # Copyright 2013 New Dream Network, LLC (DreamHost)
+# Copyright 2013 Citrix Systems, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -15,6 +16,7 @@
 #    under the License.
 #
 # @author: Mark McClain, DreamHost
+# @author: Youcef Laribi, Citrix
 
 import uuid
 
@@ -380,7 +382,7 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
             port = self._create_snatport_for_subnet(context, tenant_id, subnet_id, ip_address=None)
 
         network_info['port_id'] = port['id']
-        network_info['ip_address'] = port['fixed_ips'][0]['ip_address']
+        network_info['snat_ip'] = port['fixed_ips'][0]['ip_address']
 
         LOG.info(_("SNAT port: %s" % repr(port)))
 

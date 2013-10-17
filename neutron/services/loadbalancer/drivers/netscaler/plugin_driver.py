@@ -382,7 +382,7 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
             port = self._create_snatport_for_subnet(context, tenant_id, subnet_id, ip_address=None)
 
         network_info['port_id'] = port['id']
-        network_info['ip_address'] = port['fixed_ips'][0]['ip_address']
+        network_info['snat_ip'] = port['fixed_ips'][0]['ip_address']
 
         LOG.info(_("SNAT port: %s" % repr(port)))
 

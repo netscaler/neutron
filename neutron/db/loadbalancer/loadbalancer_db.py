@@ -23,6 +23,7 @@ from sqlalchemy.orm import validates
 from neutron.api.v2 import attributes
 from neutron.common import exceptions as q_exc
 from neutron.db import db_base_plugin_v2 as base_db
+from neutron.db.loadbalancer import db_base_serviceplugin_v2 as svc_base_db
 from neutron.db import model_base
 from neutron.db import models_v2
 from neutron.db import servicetype_db as st_db
@@ -173,7 +174,7 @@ class PoolMonitorAssociation(model_base.BASEV2,
 
 
 class LoadBalancerPluginDb(LoadBalancerPluginBase,
-                           base_db.CommonDbMixin):
+                           svc_base_db.NeutronDbServicePluginV2):
     """Wraps loadbalancer with SQLAlchemy models.
 
     A class that wraps the implementation of the Neutron loadbalancer
@@ -220,7 +221,7 @@ class LoadBalancerPluginDb(LoadBalancerPluginBase,
 
     ########################################################
     # VIP DB access
-    def _make_vip_dict(self, vip, fields=None):
+    def _make_vip_dict(self, vip, fields=None, process_extensions=True):
         fixed_ip = (vip.port.fixed_ips or [{}])[0]
 
         res = {'id': vip['id'],
@@ -247,6 +248,11 @@ class LoadBalancerPluginDb(LoadBalancerPluginBase,
                 s_p['cookie_name'] = vip['session_persistence']['cookie_name']
 
             res['session_persistence'] = s_p
+
+        # Call auxiliary extend functions, if any
+        if process_extensions:
+            self._apply_dict_extend_functions(
+                lb_const.VIPS, res, vip)
 
         return self._fields(res, fields)
 

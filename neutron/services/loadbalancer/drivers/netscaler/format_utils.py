@@ -24,7 +24,6 @@ from xml.parsers.expat import ExpatError
 #from lxml import etree
 
 from neutron.openstack.common import log as logging
-from neutron.services.loadbalancer.drivers.netscaler.pyodict import odict
 
 LOG = logging.getLogger(__name__)
 
@@ -239,7 +238,7 @@ def toxml(attrname, attrval, plurals, xmlnamespace=None, firstTime=False, xmlsty
         return output
 
         
-    if objtype == 'dict' or objtype == 'odict' or isinstance(attrval, object):
+    if objtype == 'dict' or isinstance(attrval, object):
         
         output += "<" + attrname
 
@@ -247,7 +246,7 @@ def toxml(attrname, attrval, plurals, xmlnamespace=None, firstTime=False, xmlsty
             output += " xmlns=\"" + xmlnamespace + "\""
 
             
-        complex_properties = odict() 
+        complex_properties = dict() 
 
         firstItem = True
         
@@ -411,7 +410,7 @@ def tojson(attrname, attrval, plurals):
 
         return output
 
-    if objtype == 'dict' or objtype == 'odict' or isinstance(attrval, object):
+    if objtype == 'dict' or isinstance(attrval, object):
         if attrname:
             output += "\"" + attrname + "\":" 
 

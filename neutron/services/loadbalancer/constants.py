@@ -15,6 +15,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+VIP = "vip"
+VIPS = "%ss" % VIP
+
 LB_METHOD_ROUND_ROBIN = 'ROUND_ROBIN'
 LB_METHOD_LEAST_CONNECTIONS = 'LEAST_CONNECTIONS'
 LB_METHOD_SOURCE_IP = 'SOURCE_IP'

@@ -20,6 +20,7 @@ from neutron.common import exceptions as n_exc
 from neutron import context
 from neutron.db import api as qdbapi
 from neutron.db.loadbalancer import loadbalancer_db as ldb
+from neutron.db.loadbalancer import certificate_db as certdb
 from neutron.db import servicetype_db as st_db
 from neutron.openstack.common import log as logging
 from neutron.plugins.common import constants
@@ -31,7 +32,8 @@ LOG = logging.getLogger(__name__)
 
 
 class LoadBalancerPlugin(ldb.LoadBalancerPluginDb,
-                         agent_scheduler.LbaasAgentSchedulerDbMixin):
+                         agent_scheduler.LbaasAgentSchedulerDbMixin,
+                         certdb.CertificateDbMixin):
     """Implementation of the Neutron Loadbalancer Service Plugin.
 
     This class manages the workflow of LBaaS request/response.
@@ -40,7 +42,8 @@ class LoadBalancerPlugin(ldb.LoadBalancerPluginDb,
     """
     supported_extension_aliases = ["lbaas",
                                    "lbaas_agent_scheduler",
-                                   "service-type"]
+                                   "service-type",
+                                   "certificates"]
 
     # lbaas agent notifiers to handle agent update operations;
     # can be updated by plugin drivers while loading;
@@ -106,6 +109,9 @@ class LoadBalancerPlugin(ldb.LoadBalancerPluginDb,
     def create_vip(self, context, vip):
         v = super(LoadBalancerPlugin, self).create_vip(context, vip)
         driver = self._get_driver_for_pool(context, v['pool_id'])
+        certificate = self._get_certificate_on_vip(context, vip)
+        if certificate:
+            self._process_vip_create_certificate(context, v, certificate)
         driver.create_vip(context, v)
         return v
 
