@@ -50,37 +50,36 @@ class RESTClient:
         self.uri = uri
         host_port_parts = parts.netloc.split(':')
         
-        port = None
+        self.port = None
         
         if len(host_port_parts) > 1:
-            host = host_port_parts[0]
-            port = host_port_parts[1]
+            self.host = host_port_parts[0]
+            self.port = host_port_parts[1]
         else:
-            host = host_port_parts[0]
+            self.host = host_port_parts[0]
 
-        if type(host).__name__ == 'unicode':
-            host = host.encode('ascii','ignore')
+        if type(self.host).__name__ == 'unicode':
+            self.host = self.host.encode('ascii','ignore')
         
-        if port and type(port).__name__ == 'unicode':
-            port = port.encode('ascii','ignore')
+        if self.port and type(self.port).__name__ == 'unicode':
+            self.port = self.port.encode('ascii','ignore')
 
-        self.host = host
 
         if parts.scheme.lower() == "http":   
-            if not port:
-                port = 80     
-            self.connection = httplib.HTTPConnection(host, port)
+            self.protocol = "http"
+            if not self.port:
+
+                self.port = 80     
+
 
         elif parts.scheme.lower() == "https":
-            if not port:
-                port = 443
-            self.connection = httplib.HTTPSConnection(host, port)
+            self.protocol = "https"
+            if not self.port:
+                self.port = 443
+
         else:
             LOG.error(_("scheme in uri is unrecognized:%s" % parts.scheme))
             raise q_exc.ServiceUnavailable()
-
-
-        LOG.debug(_("RestClient created connection for %s:%s" % (host, port) ))
             
         self.service_path = parts.path
         
@@ -90,6 +89,20 @@ class RESTClient:
             base64string = base64.encodestring("%s:%s" % (username, password))
             base64string = base64string[:-1]
             self.auth = 'Basic %s' % base64string
+
+
+    def _get_connection(self):
+
+        if self.protocol == "http":
+            connection = httplib.HTTPConnection(self.host, self.port)     
+        elif self.protocol == "https":
+            connection = httplib.HTTPSConnection(self.host, self.port)
+        else:
+            LOG.error(_("protocol unrecognized:%s" % self.protocol))
+            raise q_exc.ServiceUnavailable()
+
+        return connection
+
 
     def _is_valid_response(self, response_status):
         if response_status < httplib.BAD_REQUEST: # startus is less than 400, the response is fine
@@ -153,10 +166,15 @@ class RESTClient:
         LOG.debug(_("Headers in create_resource %s " % repr(headers)))
 
         try:
-            self.connection.request(method, url_path, body=request_body, headers=headers)
 
-            response = self.connection.getresponse()
+            connection = self._get_connection()
 
+            connection.request(method, url_path, body=request_body, headers=headers)
+
+            response = connection.getresponse()
+
+            connection.close()
+            
             resp_dict = self._get_response_dict(response, serializer)
             
             LOG.debug(_("Response: %s" % (resp_dict['body'])))
@@ -181,6 +199,8 @@ class RESTClient:
             exc_type, exc_value, exc_tb = sys.exc_info()
             LOG.error(_("Error while connecting to %s :  %s") % (self.uri, exc_type))
             raise q_exc.ServiceUnavailable()
+
+
     
     
     def retrieve_resource(self, resource_path, parse_response=True):
@@ -196,7 +216,9 @@ class RESTClient:
 
         LOG.debug(_("Headers used for request %s" % (str(headers))))
 
-        self.connection.request(method, url_path, headers=headers)
+        connection = self._get_connection()
+
+        connection.request(method, url_path, headers=headers)
         
         LOG.debug(_("Plurals used for parsing %s" % (str(self.plurals))))
         
@@ -208,8 +230,10 @@ class RESTClient:
         
         try:
         
-            response = self.connection.getresponse()
-            
+            response = connection.getresponse()
+
+            connection.close()
+
             resp_dict = self._get_response_dict(response, serializer)
             
             response_status = resp_dict['status']
@@ -251,9 +275,14 @@ class RESTClient:
         LOG.debug(_("Auth:%s url_path:%s requestbody: %s" % (self.auth,url_path, request_body)))
         
         try:
-            self.connection.request(method, url_path, body=request_body, headers=headers)
 
-            response = self.connection.getresponse()
+            connection = self._get_connection()
+
+            connection.request(method, url_path, body=request_body, headers=headers)
+
+            response = connection.getresponse()
+
+            connection.close()
 
             resp_dict = self._get_response_dict(response, serializer)
 
@@ -294,9 +323,13 @@ class RESTClient:
 
         LOG.debug(_("Headers used for request %s" % (str(headers))))
 
-        self.connection.request(method, url_path, headers=headers)
+        connection = self._get_connection()
 
-        response = self.connection.getresponse()
+        connection.request(method, url_path, headers=headers)
+
+        response = connection.getresponse()
+
+        connection.close()
 
         serializer = None
 
@@ -326,5 +359,5 @@ class RESTClient:
 
         return response_status, resp_dict
 
-    def close(self):
-        self.connection.close()
+
+        
