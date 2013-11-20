@@ -41,6 +41,7 @@ active_plugins = [plugin_class_path]
 active_plugins += neutron_config.service_plugins
 
 for class_path in active_plugins:
+    print class_path
     importutils.import_class(class_path)
 
 # set the target for 'autogenerate' support
