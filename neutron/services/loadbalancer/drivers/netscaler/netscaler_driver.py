@@ -12,14 +12,22 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import json
 from oslo.config import cfg
 
+from neutron import context
 from neutron.api.v2 import attributes
 from neutron.db.loadbalancer import loadbalancer_db
 from neutron.openstack.common import log as logging
+from neutron.openstack.common import periodic_task
+from neutron.openstack.common import service
 from neutron.plugins.common import constants
 from neutron.services.loadbalancer.drivers import abstract_driver
 from neutron.services.loadbalancer.drivers.netscaler import ncc_client
+
+DEFAULT_STATUS_COLLECTION = "True"
+DEFAULT_STATUS_COLLECTION_INTERVAL = "2"
+DEFAULT_PAGE_SIZE = "300"
 
 LOG = logging.getLogger(__name__)
 
@@ -35,6 +43,11 @@ NETSCALER_CC_OPTS = [
     cfg.StrOpt(
         'netscaler_ncc_password',
         help=_('Password to login to the NetScaler Control Center Server.'),
+    ),
+    cfg.StrOpt(
+        'netscaler_status_collection',
+        default=DEFAULT_STATUS_COLLECTION + "," + DEFAULT_STATUS_COLLECTION_INTERVAL + "," + DEFAULT_PAGE_SIZE,
+        help=_('Setting for member status collection from NetScaler Control Center Server.'),
     )
 ]
 
@@ -48,10 +61,15 @@ POOLMEMBERS_RESOURCE = 'members'
 POOLMEMBER_RESOURCE = 'member'
 MONITORS_RESOURCE = 'healthmonitors'
 MONITOR_RESOURCE = 'healthmonitor'
-POOLSTATS_RESOURCE = 'statistics'
+STATS_RESOURCE = 'stats'
 PROV_SEGMT_ID = 'provider:segmentation_id'
 PROV_NET_TYPE = 'provider:network_type'
 DRIVER_NAME = 'netscaler_driver'
+RESOURCE_PREFIX = 'v2.0/lb'
+STATUS_PREFIX = 'oca/v1'
+MEMBER_STATUS = 'memberstatus'
+PAGE = 'page'
+SIZE = 'size'
 
 
 class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
@@ -66,6 +84,12 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
         self.client = ncc_client.NSClient(ncc_uri,
                                           ncc_username,
                                           ncc_password)
+        self.enable_status_collection, self.status_collection_interval, self.status_collection_pagesize  = cfg.CONF.netscaler_driver.netscaler_status_collection.split(",")
+        if self.enable_status_collection.lower() == "true":
+            self.enable_stats_collection = True
+            self.launch_status_collection(self.enable_status_collection, self.status_collection_interval, self.status_collection_pagesize, self.client, self.plugin)
+        else:
+            self.enable_stats_collection = False
 
     def create_vip(self, context, vip):
         """Create a vip on a NetScaler device."""
@@ -76,7 +100,8 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
         LOG.debug(msg)
         status = constants.ACTIVE
         try:
-            self.client.create_resource(context.tenant_id, VIPS_RESOURCE,
+            resource_path = "%s/%s" %(RESOURCE_PREFIX, VIPS_RESOURCE)
+            self.client.create_resource(context.tenant_id, resource_path,
                                         VIP_RESOURCE, ncc_vip)
         except ncc_client.NCCException:
             status = constants.ERROR
@@ -86,7 +111,7 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
     def update_vip(self, context, old_vip, vip):
         """Update a vip on a NetScaler device."""
         update_vip = self._prepare_vip_for_update(vip)
-        resource_path = "%s/%s" % (VIPS_RESOURCE, vip["id"])
+        resource_path = "%s/%s/%s" % (RESOURCE_PREFIX, VIPS_RESOURCE, vip["id"])
         msg = (_("NetScaler driver vip %(vip_id)s update: %(vip_obj)s") %
                {"vip_id": vip["id"], "vip_obj": repr(vip)})
         LOG.debug(msg)
@@ -101,7 +126,7 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
 
     def delete_vip(self, context, vip):
         """Delete a vip on a NetScaler device."""
-        resource_path = "%s/%s" % (VIPS_RESOURCE, vip["id"])
+        resource_path = "%s/%s/%s" % (RESOURCE_PREFIX, VIPS_RESOURCE, vip["id"])
         msg = _("NetScaler driver vip removal: %s") % vip["id"]
         LOG.debug(msg)
         try:
@@ -127,7 +152,8 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
         LOG.debug(msg)
         status = constants.ACTIVE
         try:
-            self.client.create_resource(context.tenant_id, POOLS_RESOURCE,
+            resource_path = "%s/%s" %(RESOURCE_PREFIX, POOLS_RESOURCE)
+            self.client.create_resource(context.tenant_id, resource_path,
                                         POOL_RESOURCE, ncc_pool)
         except ncc_client.NCCException:
             status = constants.ERROR
@@ -137,7 +163,7 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
     def update_pool(self, context, old_pool, pool):
         """Update a pool on a NetScaler device."""
         ncc_pool = self._prepare_pool_for_update(pool)
-        resource_path = "%s/%s" % (POOLS_RESOURCE, old_pool["id"])
+        resource_path = "%s/%s/%s" % (RESOURCE_PREFIX, POOLS_RESOURCE, old_pool["id"])
         msg = (_("NetScaler driver pool %(pool_id)s update: %(pool_obj)s") %
                {"pool_id": old_pool["id"], "pool_obj": repr(ncc_pool)})
         LOG.debug(msg)
@@ -152,7 +178,7 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
 
     def delete_pool(self, context, pool):
         """Delete a pool on a NetScaler device."""
-        resource_path = "%s/%s" % (POOLS_RESOURCE, pool['id'])
+        resource_path = "%s/%s/%s" % (RESOURCE_PREFIX, POOLS_RESOURCE, pool['id'])
         msg = _("NetScaler driver pool removal: %s") % pool["id"]
         LOG.debug(msg)
         try:
@@ -175,8 +201,9 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
         LOG.info(msg)
         status = constants.ACTIVE
         try:
+            resource_path = "%s/%s" %(RESOURCE_PREFIX, POOLMEMBERS_RESOURCE)
             self.client.create_resource(context.tenant_id,
-                                        POOLMEMBERS_RESOURCE,
+                                        resource_path,
                                         POOLMEMBER_RESOURCE,
                                         ncc_member)
         except ncc_client.NCCException:
@@ -187,7 +214,7 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
     def update_member(self, context, old_member, member):
         """Update a pool member on a NetScaler device."""
         ncc_member = self._prepare_member_for_update(member)
-        resource_path = "%s/%s" % (POOLMEMBERS_RESOURCE, old_member["id"])
+        resource_path = "%s/%s/%s" % (RESOURCE_PREFIX, POOLMEMBERS_RESOURCE, old_member["id"])
         msg = (_("NetScaler driver poolmember %(member_id)s update:"
                  " %(member_obj)s") %
                {"member_id": old_member["id"],
@@ -204,7 +231,7 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
 
     def delete_member(self, context, member):
         """Delete a pool member on a NetScaler device."""
-        resource_path = "%s/%s" % (POOLMEMBERS_RESOURCE, member['id'])
+        resource_path = "%s/%s/%s" % (RESOURCE_PREFIX, POOLMEMBERS_RESOURCE, member['id'])
         msg = (_("NetScaler driver poolmember removal: %s") %
                member["id"])
         LOG.debug(msg)
@@ -221,7 +248,7 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
         """Create a pool health monitor on a NetScaler device."""
         ncc_hm = self._prepare_healthmonitor_for_creation(health_monitor,
                                                           pool_id)
-        resource_path = "%s/%s/%s" % (POOLS_RESOURCE, pool_id,
+        resource_path = "%s/%s/%s/%s" % (RESOURCE_PREFIX, POOLS_RESOURCE, pool_id,
                                       MONITORS_RESOURCE)
         msg = (_("NetScaler driver healthmonitor creation for pool %(pool_id)s"
                  ": %(monitor_obj)s") %
@@ -244,7 +271,7 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
                                    health_monitor, pool_id):
         """Update a pool health monitor on a NetScaler device."""
         ncc_hm = self._prepare_healthmonitor_for_update(health_monitor)
-        resource_path = "%s/%s" % (MONITORS_RESOURCE,
+        resource_path = "%s/%s/%s" % (RESOURCE_PREFIX,MONITORS_RESOURCE,
                                    old_health_monitor["id"])
         msg = (_("NetScaler driver healthmonitor %(monitor_id)s update: "
                  "%(monitor_obj)s") %
@@ -264,7 +291,7 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
 
     def delete_pool_health_monitor(self, context, health_monitor, pool_id):
         """Delete a pool health monitor on a NetScaler device."""
-        resource_path = "%s/%s/%s/%s" % (POOLS_RESOURCE, pool_id,
+        resource_path = "%s/%s/%s/%s/%s" % (RESOURCE_PREFIX, POOLS_RESOURCE, pool_id,
                                          MONITORS_RESOURCE,
                                          health_monitor["id"])
         msg = (_("NetScaler driver healthmonitor %(monitor_id)s"
@@ -286,17 +313,22 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
 
     def stats(self, context, pool_id):
         """Retrieve pool statistics from the NetScaler device."""
-        resource_path = "%s/%s" % (POOLSTATS_RESOURCE, pool_id)
+        resource_path = "%s/%s/%s/%s" % (RESOURCE_PREFIX, POOLS_RESOURCE, pool_id, STATS_RESOURCE)
         msg = _("NetScaler driver pool stats retrieval: %s") % pool_id
         LOG.debug(msg)
         try:
-            stats = self.client.retrieve_resource(context.tenant_id,
+            result = self.client.retrieve_resource(context.tenant_id,
                                                   resource_path)[1]
+            result['body'] = json.loads(result['body'])
+            stats = result['body']['stats']
+        
         except ncc_client.NCCException:
             self.plugin.update_status(context, loadbalancer_db.Pool,
                                       pool_id, constants.ERROR)
         else:
             return stats
+        
+    
 
     def _prepare_vip_for_creation(self, vip):
         creation_attrs = {
@@ -487,3 +519,61 @@ class NetScalerPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
             msg = _("Removing SNAT port for subnet %s "
                     "as this is the last pool using it...") % subnet_id
             LOG.info(msg)
+    
+
+    def launch_status_collection(self, enable_status_collection, status_collection_interval, status_collection_pagesize, ncc_client, plugin):
+
+        class Collectors(periodic_task.PeriodicTasks):
+             
+            @periodic_task.periodic_task(spacing=int(status_collection_interval), enabled=enable_status_collection)        
+            def collect_status(self, context):
+                
+                msg = _("status collection interval: %s") % status_collection_interval
+                LOG.debug(msg)
+                self._refresh_all_members_status()
+                            
+            def _refresh_all_members_status(self):
+                
+                """Retrieve poolmember status from the NetScaler device."""
+                page_no = 1
+                while True:
+                    resource_path = "%s/%s" % (STATUS_PREFIX, MEMBER_STATUS)
+                    resource_path = "%s?%s=%s&%s=%s" %(resource_path, PAGE, page_no, SIZE, status_collection_pagesize)
+                    result = ncc_client.retrieve_resource("GLOBAL",
+                                                  resource_path)[1]
+                    msg = _("result is: %s") % (str(result))
+                    LOG.debug(msg)
+                    result['body'] = json.loads(result['body'])
+                    statuses = result['body']['statuses']
+                    context_handle = context.get_admin_context()
+                    for status in statuses:
+                        pool_id = status["id"]
+                        members = status["memberstatus"]
+                        for member in members:
+                            member_id = member["id"]
+                            member_status = member["status"]
+                            member_status_desc = member["status_description"]
+                            msg = _("pool_id: %s member_id: %s member_status: %s") % (str(pool_id), str(member_id), str(member_status))
+                            LOG.debug(msg)
+                            plugin.update_status(context_handle, loadbalancer_db.Member,
+                                          member_id, member_status, member_status_desc)
+                    if (len(statuses) < int(status_collection_pagesize)):
+                        return
+                    else:
+                        page_no += 1
+
+        class AsyncStatusCollectorService(service.Service):
+            def start(self):
+                super(AsyncStatusCollectorService, self).start()
+                enable_status_collection, status_collection_interval, status_collection_pagesize  = cfg.CONF.netscaler_driver.netscaler_status_collection.split(",")
+                self.tg.add_timer(
+                    int(status_collection_interval),
+                    collectors.run_periodic_tasks,
+                    None,
+                    None
+                )
+        collectors = Collectors()
+        svc = AsyncStatusCollectorService()
+        service.launch(svc)
+
+    
